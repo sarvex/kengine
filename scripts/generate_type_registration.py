@@ -84,9 +84,10 @@ namespace ''' + args.namespace + ' {'
 	open(out_path, 'w').write(content)
 
 def generate_registration_headers():
-	ret = ''
-	for registration in pre_registrators:
-		ret += f'#include "{registration["header"]}"\n'
+	ret = ''.join(
+		f'#include "{registration["header"]}"\n'
+		for registration in pre_registrators
+	)
 	for registration in registrators:
 		ret += f'#include "{registration["header"]}"\n'
 	return ret
@@ -160,8 +161,7 @@ for file_name, parsed_file in parsed_files.items():
 		if full_name == 'putils::reflection::type_info':
 			return
 
-		type = {}
-		type['type'] = full_name
+		type = {'type': full_name}
 		clean_name = type['type'].replace('::', '_')
 		type['function_name'] = f'register_{clean_name}'
 		all_types[file_name].append(type)
@@ -258,13 +258,19 @@ namespace ''' + args.namespace + ' {'
 	}
 }'''
 
-	open(main_file + '.cpp', 'w').write(main_file_cpp)
-	open(main_file + '.hpp', 'w').write('''
+	open(f'{main_file}.cpp', 'w').write(main_file_cpp)
+	open(f'{main_file}.hpp', 'w').write(
+		'''
 #pragma once
 
 // entt
 #include <entt/entity/fwd.hpp>
 
-namespace ''' + args.namespace + ''' {
-	''' + args.export_macro + ''' void add_type_registrator(entt::registry & r) noexcept;
-}''')
+namespace '''
+		+ args.namespace
+		+ ''' {
+	'''
+		+ args.export_macro
+		+ ''' void add_type_registrator(entt::registry & r) noexcept;
+}'''
+	)

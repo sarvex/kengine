@@ -33,21 +33,18 @@ def find_url(doc, symbol):
 	"""
 	
 	#First check for an exact match with a top-level object (namespaces, objects etc.)
-	
+
 	#env = inliner.document.settings.env
-	
+
 	matches = []
 	for compound in doc.findall('.//compound'):
 		if compound.find('name').text == symbol:
 			matches += [{'file':compound.find('filename').text, 'kind':compound.get('kind')}]
-	
-	if len(matches) > 1:
-		pass
-		#env.warn(env.docname, 'There were multiple matches for `%s`: %s' % (symbol, matches))
+
 	if len(matches) == 1:
 		return matches[0]
-	
-	
+
+
 	#Strip off first namespace bit of the compound name so that 'ArraySizes' can match 'PolyVox::ArraySizes'
 	for compound in doc.findall('.//compound'):
 		symbol_list = compound.find('name').text.split('::', 1)
@@ -55,7 +52,7 @@ def find_url(doc, symbol):
 			reducedsymbol = symbol_list[1]
 			if reducedsymbol == symbol:
 				return {'file':compound.find('filename').text, 'kind':compound.get('kind')}
-	
+
 	#Now split the symbol by '::'. Find an exact match for the first part and then a member match for the second
 	#So PolyVox::Array::operator[] becomes like {namespace: "PolyVox::Array", endsymbol: "operator[]"}
 	symbol_list = symbol.rsplit('::', 1)
@@ -68,13 +65,22 @@ def find_url(doc, symbol):
 					#If this compound object contains the matching member then return it
 					if member.find('name').text == endsymbol:
 						return {'file':(member.findtext('anchorfile') or compound.findtext('filename')) + '#' + member.find('anchor').text, 'kind':member.get('kind')}
-	
-	#Then we'll look at unqualified members
-	for member in doc.findall('.//member'):
-		if member.find('name').text == symbol:
-			return {'file':(member.findtext('anchorfile') or compound.findtext('filename')) + '#' + member.find('anchor').text, 'kind':member.get('kind')}
-	
-	return None
+
+	return next(
+		(
+			{
+				'file': (
+					member.findtext('anchorfile') or compound.findtext('filename')
+				)
+				+ '#'
+				+ member.find('anchor').text,
+				'kind': member.get('kind'),
+			}
+			for member in doc.findall('.//member')
+			if member.find('name').text == symbol
+		),
+		None,
+	)
 
 def parse_tag_file(doc):
 	"""
@@ -121,43 +127,44 @@ def parse_tag_file(doc):
 	function_list = [] #This is a list of function to be parsed and inserted into mapping at the end of the function.
 	for compound in doc.findall("./compound"):
 		compound_kind = compound.get('kind')
-		if compound_kind != 'namespace' and compound_kind != 'class':
+		if compound_kind not in ['namespace', 'class']:
 			continue #Skip everything that isn't a namespace or class
-		
+
 		compound_name = compound.findtext('name')
 		compound_filename = compound.findtext('filename')
-		
+
 		#If it's a compound we can simply add it
 		mapping[compound_name] = {'kind' : compound_kind, 'file' : compound_filename}
-		
+
 		for member in compound.findall('member'):
-			
+
 			#If the member doesn't have an <anchorfile> element, use the parent compounds <filename> instead
 			#This is the way it is in the qt.tag and is perhaps an artefact of old Doxygen
 			anchorfile = member.findtext('anchorfile') or compound_filename
 			member_symbol = join(compound_name, '::', member.findtext('name'))
 			member_kind = member.get('kind')
 			arglist_text = member.findtext('./arglist') #If it has an <arglist> then we assume it's a function. Empty <arglist> returns '', not None. Things like typedefs and enums can have empty arglists
-			
+
 			if arglist_text and member_kind != 'variable' and member_kind != 'typedef' and member_kind != 'enumeration':
 				function_list.append((member_symbol, arglist_text, member_kind, join(anchorfile,'#',member.findtext('anchor'))))
 			else:
 				mapping[member_symbol] = {'kind' : member.get('kind'), 'file' : join(anchorfile,'#',member.findtext('anchor'))}
-	
+
 	for old_tuple, normalised_tuple in zip(function_list, itertools.imap(normalise, (member_tuple[1] for member_tuple in function_list))):
 		member_symbol = old_tuple[0]
-		original_arglist = old_tuple[1]
 		kind = old_tuple[2]
-		anchor_link = old_tuple[3]
 		normalised_arglist = normalised_tuple[1]
-		if normalised_tuple[1] is not None: #This is a 'flag' for a ParseException having happened
+		if normalised_arglist is not None: #This is a 'flag' for a ParseException having happened
+			anchor_link = old_tuple[3]
 			if mapping.get(member_symbol):
 				mapping[member_symbol]['arglist'][normalised_arglist] = anchor_link
 			else:
 				mapping[member_symbol] = {'kind' : kind, 'arglist' : {normalised_arglist : anchor_link}}
 		else:
-			print('Skipping %s %s%s. Error reported from parser was: %s' % (old_tuple[2], old_tuple[0], old_tuple[1], normalised_tuple[0]))
-	
+			original_arglist = old_tuple[1]
+			print(
+				f'Skipping {kind} {old_tuple[0]}{original_arglist}. Error reported from parser was: {normalised_tuple[0]}'
+			)
 	#from pprint import pprint; pprint(mapping)
 	return mapping
 
@@ -346,23 +353,13 @@ def find_url_piecewise(mapping, symbol):
 
 def find_url_classes(mapping, symbol):
 	"""Prefer classes over names of constructors"""
-	classes_list = {}
-	for item, data in mapping.items():
-		if data['kind'] == 'class':
-			#print symbol + ' : ' + item
-			classes_list[item] = data
-	
-	return classes_list
+	return {
+		item: data for item, data in mapping.items() if data['kind'] == 'class'
+	}
 
 def find_url_remove_templates(mapping, symbol):
 	"""Now, to disambiguate between ``PolyVox::Array< 1, ElementType >::operator[]`` and ``PolyVox::Array::operator[]`` matching ``operator[]``, we will ignore templated (as in C++ templates) tag names by removing names containing ``<``"""
-	no_templates_list = {}
-	for item, data in mapping.items():
-		if '<' not in item:
-			#print symbol + ' : ' + item
-			no_templates_list[item] = data
-	
-	return no_templates_list
+	return {item: data for item, data in mapping.items() if '<' not in item}
 
 def join(*args):
 	return ''.join(args)
@@ -371,13 +368,13 @@ def create_role(app, tag_filename, rootdir):
 	#Tidy up the root directory path
 	if not rootdir.endswith(('/', '\\')):
 		rootdir = join(rootdir, os.sep)
-	
+
 	try:
 		tag_file = ET.parse(tag_filename)
-		
+
 		cache_name = os.path.basename(tag_filename)
-		
-		app.info(bold('Checking tag file cache for %s: ' % cache_name), nonl=True)
+
+		app.info(bold(f'Checking tag file cache for {cache_name}: '), nonl=True)
 		if not hasattr(app.env, 'doxylink_cache'):
 			# no cache present at all, initialise it
 			app.info('No cache at all, rebuilding...')
@@ -398,8 +395,12 @@ def create_role(app, tag_filename, rootdir):
 			app.info('Sub-cache is up-to-date')
 	except IOError:
 		tag_file = None
-		app.warn(standout('Could not open tag file %s. Make sure your `doxylink` config variable is set correctly.' % tag_filename))
-	
+		app.warn(
+			standout(
+				f'Could not open tag file {tag_filename}. Make sure your `doxylink` config variable is set correctly.'
+			)
+		)
+
 	def find_doxygen_link(name, rawtext, text, lineno, inliner, options={}, content=[]):
 		text = utils.unescape(text)
 		# from :name:`title <part>`
@@ -410,9 +411,11 @@ def create_role(app, tag_filename, rootdir):
 			try:
 				url = find_url2(app.env.doxylink_cache[cache_name]['mapping'], part)
 			except LookupError as error:
-				warning_messages.append('Error while parsing `%s`. Is not a well-formed C++ function call or symbol. If this is not the case, it is a doxylink bug so please report it. Error reported was: %s' % (part, error))
+				warning_messages.append(
+					f'Error while parsing `{part}`. Is not a well-formed C++ function call or symbol. If this is not the case, it is a doxylink bug so please report it. Error reported was: {error}'
+				)
 			if url:
-				
+
 				#If it's an absolute path then the link will work regardless of the document directory
 				#Also check if it is a URL (i.e. it has a 'scheme' like 'http' or 'file')
 				if os.path.isabs(rootdir) or urlparse.urlparse(rootdir).scheme:
@@ -421,20 +424,24 @@ def create_role(app, tag_filename, rootdir):
 				else:
 					relative_path_to_docsrc = os.path.relpath(app.env.srcdir, os.path.dirname(inliner.document.current_source))
 					full_url = join(relative_path_to_docsrc, '/', rootdir, url['file']) #We always use the '/' here rather than os.sep since this is a web link avoids problems like documentation/.\../library/doc/ (mixed slashes)
-				
+
 				if url['kind'] == 'function' and app.config.add_function_parentheses and not normalise(title)[1]:
 					title = join(title, '()')
-				
+
 				pnode = nodes.reference(title, title, internal=False, refuri=full_url)
 				return [pnode], []
 			#By here, no match was found
-			warning_messages.append('Could not find match for `%s` in `%s` tag file' % (part, tag_filename))
+			warning_messages.append(
+				f'Could not find match for `{part}` in `{tag_filename}` tag file'
+			)
 		else:
-			warning_messages.append('Could not find match for `%s` because tag file not found' % (part))
-		
+			warning_messages.append(
+				f'Could not find match for `{part}` because tag file not found'
+			)
+
 		pnode = nodes.inline(rawsource=title, text=title)
 		return [pnode], [inliner.reporter.warning(message, line=lineno) for message in warning_messages]
-	
+
 	return find_doxygen_link
 
 def setup_doxylink_roles(app):

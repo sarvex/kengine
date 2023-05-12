@@ -42,14 +42,9 @@ for z in range(vol.getDepth()):
 		for x in range(vol.getWidth()):
 			#Compute how far the current position is from the center of the volume
 			fDistToCenter = (pv.Vector3Dint32_t(x,y,z) - v3dVolCenter).length()
-			
+
 			#If the current voxel is less than 'radius' units from the center then we make it solid.
-			if(fDistToCenter <= sphereRadius):
-				#Our new voxel value
-				uVoxelValue = 255
-			else:
-				uVoxelValue = 0
-			
+			uVoxelValue = 255 if (fDistToCenter <= sphereRadius) else 0
 			#Write the voxel value into the volume
 			vol.setVoxelAt(x, y, z, uVoxelValue);
 
@@ -94,34 +89,36 @@ def run():
 	pygame.init()
 	clock = pygame.time.Clock()
 	screen = pygame.display.set_mode(SCREEN_SIZE, pygame.HWSURFACE|pygame.OPENGL|pygame.DOUBLEBUF)
-	
+
 	#The first thing we do is print some OpenGL details and check that we have a good enough version
 	print("OpenGL Implementation Details:")
 	if glGetString(GL_VENDOR):
-		print("\tGL_VENDOR: {}".format(glGetString(GL_VENDOR).decode()))
+		print(f"\tGL_VENDOR: {glGetString(GL_VENDOR).decode()}")
 	if glGetString(GL_RENDERER):
-		print("\tGL_RENDERER: {}".format(glGetString(GL_RENDERER).decode()))
+		print(f"\tGL_RENDERER: {glGetString(GL_RENDERER).decode()}")
 	if glGetString(GL_VERSION):
-		print("\tGL_VERSION: {}".format(glGetString(GL_VERSION).decode()))
+		print(f"\tGL_VERSION: {glGetString(GL_VERSION).decode()}")
 	if glGetString(GL_SHADING_LANGUAGE_VERSION):
-		print("\tGL_SHADING_LANGUAGE_VERSION: {}".format(glGetString(GL_SHADING_LANGUAGE_VERSION).decode()))
-	
+		print(
+			f"\tGL_SHADING_LANGUAGE_VERSION: {glGetString(GL_SHADING_LANGUAGE_VERSION).decode()}"
+		)
+
 	major_version = int(glGetString(GL_VERSION).decode().split()[0].split('.')[0])
 	minor_version = int(glGetString(GL_VERSION).decode().split()[0].split('.')[1])
-	if major_version < 3 or (major_version < 3 and minor_version < 0):
+	if major_version < 3:
 		print("OpenGL version must be at least 3.0 (found {0})".format(glGetString(GL_VERSION).decode().split()[0]))
-	
+
 	#Now onto the OpenGL initialisation
-	
+
 	#Set up depth culling
 	glEnable(GL_CULL_FACE)
 	glEnable(GL_DEPTH_TEST)
 	glDepthMask(GL_TRUE)
 	glDepthFunc(GL_LEQUAL)
 	glDepthRange(0.0, 1.0)
-	
+
 	#We create out shaders which do little more than set a flat colour for each face
-	
+
 	VERTEX_SHADER = shaders.compileShader(b"""
 	#version 130
 	
@@ -143,8 +140,8 @@ def run():
 		theColor = clamp(abs(dot(normalize(normal.xyz), normalize(vec3(0.9,0.1,0.5)))), 0, 1);
 	}
 	""", GL_VERTEX_SHADER)
-	
-	
+
+
 	FRAGMENT_SHADER = shaders.compileShader(b"""
 	#version 130
 	
@@ -156,69 +153,69 @@ def run():
 		outputColor = vec4(1.0, 0.5, theColor, 1.0);
 	}
 	""", GL_FRAGMENT_SHADER)
-	
+
 	shader = shaders.compileProgram(VERTEX_SHADER, FRAGMENT_SHADER)
-	
+
 	#And then grab our attribute locations from it
 	glBindAttribLocation(shader, 0, b"position")
 	glBindAttribLocation(shader, 1, b"normal")
-	
+
 	#Create the Vertex Array Object to hold our volume mesh
 	vertexArrayObject = GLuint(0)
 	glGenVertexArrays(1, vertexArrayObject)
 	glBindVertexArray(vertexArrayObject)
-	
+
 	#Create the index buffer object
 	indexPositions = vbo.VBO(indices, target=GL_ELEMENT_ARRAY_BUFFER, usage=GL_STATIC_DRAW)
 	#Create the VBO
 	vertexPositions = vbo.VBO(vertices, usage=GL_STATIC_DRAW)
-	
+
 	#Bind our VBOs and set up our data layout specifications
 	with indexPositions, vertexPositions:
 		glEnableVertexAttribArray(0)
 		glVertexAttribPointer(0, 3, GL_FLOAT, False, 6*vertices.dtype.itemsize, vertexPositions+(0*vertices.dtype.itemsize))
 		glEnableVertexAttribArray(1)
 		glVertexAttribPointer(1, 3, GL_FLOAT, False, 6*vertices.dtype.itemsize, vertexPositions+(3*vertices.dtype.itemsize))
-		
+
 		glBindVertexArray(0)
 		glDisableVertexAttribArray(0)
-	
+
 	#Now grab out transformation martix locations
 	modelMatrixUnif = glGetUniformLocation(shader, b"modelMatrix")
 	viewMatrixUnif = glGetUniformLocation(shader, b"viewMatrix")
 	projectionMatrixUnif = glGetUniformLocation(shader, b"projectionMatrix")
-	
+
 	modelMatrix = np.array([[1.0,0.0,0.0,-32.0],[0.0,1.0,0.0,-32.0],[0.0,0.0,1.0,-32.0],[0.0,0.0,0.0,1.0]], dtype='f')
 	viewMatrix = np.array([[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,-50.0],[0.0,0.0,0.0,1.0]], dtype='f')
 	projectionMatrix = np.array([[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0]], dtype='f')
-	
+
 	#These next few lines just set up our camera frustum
 	fovDeg = 45.0
 	frustumScale = 1.0 / tan(radians(fovDeg) / 2.0)
-	
+
 	zNear = 1.0
 	zFar = 1000.0
-	
+
 	projectionMatrix[0][0] = frustumScale
 	projectionMatrix[1][1] = frustumScale
 	projectionMatrix[2][2] = (zFar + zNear) / (zNear - zFar)
 	projectionMatrix[2][3] = -1.0
 	projectionMatrix[3][2] = (2 * zFar * zNear) / (zNear - zFar)
-	
+
 	#viewMatrix and projectionMatrix don't change ever so just set them once here
 	with shader:
 		glUniformMatrix4fv(projectionMatrixUnif, 1, GL_TRUE, projectionMatrix)
 		glUniformMatrix4fv(viewMatrixUnif, 1, GL_TRUE, viewMatrix)
-	
+
 	#These are used to track the rotation of the volume
 	LastFrameMousePos = (0,0)
 	CurrentMousePos = (0,0)
 	xRotation = 0
 	yRotation = 0
-	
+
 	while True:
 		clock.tick()
-		
+
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
 				return
@@ -233,24 +230,24 @@ def run():
 				xRotation += event.rel[0]
 				yRotation += event.rel[1]
 				LastFrameMousePos = CurrentMousePos
-		
+
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-		
+
 		#Perform the rotation of the mesh
 		moveToOrigin = np.array([[1.0,0.0,0.0,-32.0],[0.0,1.0,0.0,-32.0],[0.0,0.0,1.0,-32.0],[0.0,0.0,0.0,1.0]], dtype='f')
 		rotateAroundX = np.array([[1.0,0.0,0.0,0.0],[0.0,cos(radians(yRotation)),-sin(radians(yRotation)),0.0],[0.0,sin(radians(yRotation)),cos(radians(yRotation)),0.0],[0.0,0.0,0.0,1.0]], dtype='f')
 		rotateAroundY = np.array([[cos(radians(xRotation)),0.0,sin(radians(xRotation)),0.0],[0.0,1.0,0.0,0.0],[-sin(radians(xRotation)),0.0,cos(radians(xRotation)),0.0],[0.0,0.0,0.0,1.0]], dtype='f')
-		
+
 		modelMatrix = rotateAroundY.dot(rotateAroundX.dot(moveToOrigin))
-		
+
 		with shader:
 			glUniformMatrix4fv(modelMatrixUnif, 1, GL_TRUE, modelMatrix)
 			glBindVertexArray(vertexArrayObject)
-			
+
 			glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
-			
+
 			glBindVertexArray(0)
-		
+
 		# Show the screen
 		pygame.display.flip()
 
